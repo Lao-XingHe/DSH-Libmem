@@ -59,7 +59,7 @@ Host 必须是回环、`Sec-Fetch-Site: cross-site` 一律拒、带 `Origin` 时
 | **书房 OS v2 内核** | 一个目录，含 `config.yaml` / `services/` / `mcp_tools/` / `data/` —— 就是 `projectRoot` 指向的东西。可发布形态见本仓 `study/v1.3.4/`（Gitee 快照） |
 | Python 3.12 + 几个包 | `fastapi` `mcp` `pyyaml` `jieba` `whoosh` `requests`（内核需要；插件只要求"这个解释器能起内核"） |
 | 两个模型服务 | 嵌入 bge-m3 @`127.0.0.1:18099`、重排 bge-reranker-v2-m3 @`127.0.0.1:18098`。**没起也能用**，但检索退化成噪声分（护栏保证不返回空） |
-| **许可证** | 内核是 **PolyForm Noncommercial 1.0.0**：自用/学习/研究免费，**公司或商用需授权**（见 `study/LICENSE`、`study/LICENSING.md`） |
+| **许可证** | **MIT**：随便用（包括商用），保留版权声明即可。见 [LICENSE](LICENSE) |
 
 ### 装法
 
@@ -617,7 +617,8 @@ deepseek-flash 之后比例没动，阈值就跟着放大到 65 万。（中途�
 
 | 版本 | 内容 |
 |---|---|
+| **V1.1.1** | 许可证改为 **MIT**（源码可见、可商用） |
 | **V1.1** | 加「近期加成」：`memories.last_hit_epoch` + 排序里 `+recent_bonus`（默认 0.05 / 30 天）。实测 hit@5 0.778 → 0.806、MRR 0.372 → 0.453（逐条 17 好 / 6 坏，p = 0.027）。关掉只需 `retrieval.recent_bonus: 0` |
 | V1.0 | 脱敏基线：当前线上插件（插件壳 + v2 内核），剔除全部记忆数据与运行时状态 |
 
-细节见 [CHANGELOG.md](CHANGELOG.md)。v2 内核许可证见 [LICENSE](LICENSE) / [LICENSING.md](LICENSING.md)。
+细节见 [CHANGELOG.md](CHANGELOG.md)。许可证见 [LICENSE](LICENSE)（MIT）。
