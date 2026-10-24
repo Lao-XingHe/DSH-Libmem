@@ -341,15 +341,22 @@ def bulk_insert(memories: list[dict]) -> int:
 
 def update_heat_count(memory_id: str, heat_delta: float = 0.0,
                       count_delta: int = 0) -> bool:
-    """热度/次数更新（B5 调用）"""
+    """热度/次数更新（B5 调用）。
+
+    ★ V1.1：同时刷新 `last_hit_epoch`（只在升温时动）。它是「近期加成」的唯一数据源，
+    与 `updated_at` **分开**——后者会被衰减任务按设计刷成当下（见 schema.sql 注释）。
+    """
+    touch = heat_delta > 0
     sql = """UPDATE memories
              SET heat = MAX(0, heat + ?),
                  count = count + ?,
-                 updated_at = ?
+                 updated_at = ?,
+                 last_hit_epoch = CASE WHEN ? THEN ? ELSE last_hit_epoch END
              WHERE memory_id = ?"""
     conn = get_conn()
     try:
-        cur = conn.execute(sql, (heat_delta, count_delta, _now_iso(), memory_id))
+        cur = conn.execute(sql, (heat_delta, count_delta, _now_iso(),
+                                 1 if touch else 0, time.time(), memory_id))
         return cur.rowcount > 0
     finally:
         conn.close()

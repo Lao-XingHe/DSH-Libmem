@@ -610,3 +610,14 @@ deepseek-flash 之后比例没动，阈值就跟着放大到 65 万。（中途�
 | 什么时候提醒换会话 | **独立插件** dsh-context-guard 配置 `warnAtRatio` | `0.8` |
 | 当前模型窗口（算百分比用） | 同上 `contextWindow` | `1000000` |
 | 开局贴几条 | libmem 配置 `recall.coldStartItems` | `6` |
+
+---
+
+## 版本
+
+| 版本 | 内容 |
+|---|---|
+| **V1.1** | 加「近期加成」：`memories.last_hit_epoch` + 排序里 `+recent_bonus`（默认 0.05 / 30 天）。实测 hit@5 0.778 → 0.806、MRR 0.372 → 0.453（逐条 17 好 / 6 坏，p = 0.027）。关掉只需 `retrieval.recent_bonus: 0` |
+| V1.0 | 脱敏基线：当前线上插件（插件壳 + v2 内核），剔除全部记忆数据与运行时状态 |
+
+细节见 [CHANGELOG.md](CHANGELOG.md)。v2 内核许可证见 [LICENSE](LICENSE) / [LICENSING.md](LICENSING.md)。

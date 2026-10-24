@@ -32,7 +32,12 @@ CREATE TABLE IF NOT EXISTS memories (
     data_sovereignty TEXT NOT NULL DEFAULT 'app',      -- 数据主权：app/user
     relations       TEXT NOT NULL DEFAULT '[]',      -- Phase2: JSON 数组，人物/概念关系链（来自温层提炼）
     source_date     TEXT,                            -- Phase2: YYYY-MM-DD 源文件日期（从 content_path 提取）
-    has_l3          INTEGER NOT NULL DEFAULT 0        -- Phase2: 1=content_path 文件存在（可 drilldown 到 L3）
+    has_l3          INTEGER NOT NULL DEFAULT 0,       -- Phase2: 1=content_path 文件存在（可 drilldown 到 L3）
+    -- ★ V1.1：最近一次「被检索命中 / 被采用」的时间（epoch 秒），0 = 从未。
+    --   为什么不复用 updated_at：衰减任务会按设计把**全库** updated_at 刷成当下
+    --   （它是"热度基准时刻"，不是"最近使用时刻"），所以后者不能当近期信号用。
+    --   纯增量列，存量库由 `ensure_schema()` 自动 ALTER 补上。
+    last_hit_epoch  REAL NOT NULL DEFAULT 0
 );
 
 -- Phase1 过滤核心索引（WHERE 组合条件）
