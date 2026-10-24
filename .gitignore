@@ -1,0 +1,19 @@
+# 运行时 / 数据 / 状态 —— 永远不进仓库
+v2/data/
+.verify/
+status.json
+watch-status.json
+poll-state.json
+model-autoload.json
+libmem-bridge.log
+*.log
+__pycache__/
+*.pyc
+node_modules/
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+
+# 本地配置（拷 config.example.yaml 改名即可）
+v2/config.local.yaml

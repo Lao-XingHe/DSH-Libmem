@@ -1,0 +1,298 @@
+extract_schedule:
+  cron:
+    times:
+    - 08:00
+    - '18:00'
+    - '22:00'
+  enabled: true
+  interval:
+    hours: 3
+  mode: interval
+  # stdio 模式下由 mcp_server 的冷库轮询使用（FastAPI 模式走上面的 interval/cron）
+  poller_interval_minutes: 10
+knowledge:
+  enabled: true
+  max_file_size_mb: 50
+  supported_extensions:
+  - .txt
+  - .md
+  - .docx
+  - .pdf
+llm:
+  large:
+    api_key: ''   # ← 填你自己的云端 key；留空表示不调云端大模型
+    base_url: https://api.deepseek.com
+    enable_reasoning: false
+    max_history_messages: -1
+    max_retries: 1
+    model: deepseek-v4-flash
+    provider: deepseek
+    reasoning_model: deepseek-reasoner
+    timeout: 120
+  local_engine: llama_server
+  small:
+    backend: llama_server
+    base_url: http://127.0.0.1:8089/v1
+    enable_reasoning: false
+    enable_thinking: false
+    max_history_messages: 50
+    max_retries: 2
+    model: Qwen3.5-4B-Q4_K_M
+    model_path: ''
+    n_ctx: 4096
+    n_gpu_layers: -1
+    num_ctx: 131072
+    timeout: 120
+    # ★ 2026-10-24：提炼批次结束后立即卸载 4B（走 router 的 POST /models/unload）。
+    #
+    # 4B 只服务 B2 温提炼，不在检索/对话链路上 —— 醒着的时间却比干活的时间长得多：
+    # 它原先靠 `sleep-idle-seconds 300` 自己睡，而活跃期冷库轮询每 10 分钟就可能
+    # 触发一次提炼，于是"醒着 = 批处理时长 + 5 分钟尾巴"，实测加载态约 3.9GB。
+    # 卸掉之后醒着的时间只剩批处理本身，下次提炼多一次 ~8s 冷加载（后台，不感知）。
+    # 改 false 即可回到"只靠 sleep-idle 自己睡"的旧行为。
+    unload_after_extract: true
+memory:
+  hot_threshold: 5
+  keyword_temperature: 0.1
+  warm_threshold: 3
+paths:
+  cold_vault: data\cold_vault
+  data_root: data
+  index_dir: data\index
+  knowledge_dir: data\knowledge
+  warm_dir: data\warm
+retrieval:
+  # B4 检索性能开关（2026-09-21 新增）
+  embed_cache: true    # 候选向量落盘缓存（data/index/embed_cache.db）
+  embed_batch: 64      # 单次请求送多少条文本
+  embed_workers: 4     # 并行批次上限
+  # FTS5 相关性预筛（2026-09-26 新增）
+  # 原 Phase1 是「按 heat 排序 + LIMIT」，**没有相关性概念**。实测（LoCoMo 阶段二、
+  # 10 段合并 5,871 行、heat 全 0）LIMIT 1000 只放行 17%，被截掉的是日期靠后的整段，
+  # recall@15 从 ~55% 塌到 9.2% 且不报错。开启后 Phase1 候选 = SQL 过滤 ∪ FTS5(BM25)。
+  #
+  # 实测（同一 5,871 行库、1,986 题的子样本 666 题）：
+  #   cap=1000 关 FTS       recall  8.3%   中位  77ms   候选 1000
+  #   cap=1000 fts_k=200    recall 33.3%   中位  57ms   候选 1164
+  #   cap=1000 fts_k=800    recall 49.5%   中位  70ms   候选 1426
+  #   cap=1000 fts_k=2000   recall 51.4%   中位  69ms   候选 1515  ← 当前默认（k 在 2000 饱和）
+  #   cap=10000 关 FTS（旧） recall 46.4%   中位 320ms   候选 5871
+  # 即：**召回比"全量喂给 Phase2"还高 5 个点，延迟低 4.6 倍**。k 到 2000 已饱和（5000 无差别）。
+  fts_prefilter: true
+  fts_k: 2000
+  # 留空 = 自动：FTS 可用时 1000、不可用时 10000（安全退化，见 retrieve 的 docstring）。
+  # 显式写值会覆盖自动选择；**不要在 FTS 不可用的环境上手写 1000**（会掉到 8% 召回）。
+  # phase1_limit: 1000
+  # Phase2 排序池（2026-09-26 新增）。**这是池子的下限，不是上限。**
+  # 实际的池 = max(它, final_topk, mmr_pool)，所以"调用方要多少就给多少"。
+  #
+  # 老代码是硬编码 `_TOPK_PHASE2 = 20` 当**上限**用，于是
+  # `retrieve(max_items=60, final_topk=60)` 静默只回 20 条 —— 不报错不告警。
+  # 危害不止少给：所有依赖大池子的机制（MMR 的 pool、cross-encoder 重排序）静默失效。
+  # 实测代价：按 max_items=60 量出的 oracle@60 与 oracle@20 **完全相等**，
+  # 差点被写成"第一阶段没有余量、重排序无用"，真因只是池子从没超过 20。
+  #
+  # 为什么放大不花钱：phase2_rank 对**全部候选**都算了分，top_k 只决定返回多少。
+  # 实测（5,871 行库）ranked 1166/1168 仍只要 55ms；本键保持默认 20 即可。
+  # 要上 cross-encoder 重排序时，把池开到 100~200 再重排（见
+  # RESULTS-cat3开放域诊断与Phase2池上限-20260926.md §四）。
+  # phase2_topk: 20
+  # 池的绝对上限，防大库无界放大内存；碰到会在 rank_stats["pool_capped"] 报出并告警。
+  # _PHASE2_POOL_MAX = 2000 目前在代码里，暂无配置键。
+  #
+  # cross-encoder 重排序（第 4 项，2026-09-26 加）
+  # 为什么需要：天花板曲线实测 cat3 证据∈候选集 90.2%、@15 只有 37.0%、@50 58.7%
+  # —— 证据早就在池子里，只是排在第 15~50 名。bi-encoder 各自编码再算余弦，
+  # 结构上拿不到"这两段在回答同一个问题"的信息；cross-encoder 把 query+doc 拼起来
+  # 过一遍模型，天生干这个。实测 logit 分离度约 7 个（相关 -3.8 / 无关 -11.0）。
+  #
+  # ⚠️ 必须有服务在跑，否则静默退化（fail-open，保持原序、不报错）：
+  #     dsh-cold-memory-watcher\bin\start-bge-rerank.ps1   （127.0.0.1:18098）
+  # 服务没起时 rank_stats["rerank"]["reason"] = "unavailable_or_incomplete"，
+  # 检索照常返回 —— 这是设计（旁路增强不许拖垮检索），但也意味着**不测就发现不了**。
+  #
+  # 延迟（热态实测、真实候选）：池 20 条 93ms / 30 条 159ms / 50 条 217ms。
+  # 逐题交错的池扫描（locomo-test/stage2_pool_sweep.py，469 题）：
+  #   档位      重排自身   端到端中位   90分位    全量增益   cat3 增益
+  #   关           —         90ms      122ms       —          —
+  #   pool20     93ms       165ms      193ms     +2.6 点    −1.1 点 ← 对 cat3 是负的！
+  #   pool30    159ms       231ms      265ms     +5.5 点    +5.4 点 ← 当前默认
+  #   pool50    217ms       290ms      331ms     +7.7 点    +8.7 点 ← 精度优先档
+  # ⚠️ **pool20 对 cat3 是负收益**：天花板曲线已证 @20 只剩 +1.0 点余量，
+  #    证据在 20 名之外，池子小于 30 时重排无事可做。别再往下调。
+  # 选 30 而不是 50：50 的中位 290ms 虽仍在 300ms 内，但 90 分位 331ms 已超线、
+  # 只剩 3% 余量，机器一忙就会破。要极限精度就把 50 打开，代价是多 58ms。
+  rerank_enabled: true
+  rerank_pool: 30
+  # ---- V1.3 增量 1：四路召回 + RRF 融合（2026-09-30）----
+  # ★ 2026-10-10：本机**已开启**（此前是 `false`）。开启前先在**真实中文 query** 上做了 A/B
+  #   （`scratch\_ab_four_routes.py`：12 条来自冷库的真人提问；两臂次序逐题对调、
+  #   先热身一轮丢弃、`apply_heat=False` 无副作用）：
+  #     · Top-10 重合 **6.6/10**（四路确实换掉了结果，不是可有可无的开关）；首条相同 6/12
+  #     · 耗时中位 **225ms → 220ms**（本机 733 条库）。参赛版量到的 +198ms 是在
+  #       **24 万轮级**库上，规模差约 300×，不能直接套用
+  #     · 各路命中候选：路1 语义 20.0 · 路2 实体 6.8 · 路4 词法 18.7；
+  #       **路3 时间 0/12**（中文日常问句抽不出可用时间窗，与 `enabled_routes` 注释一致）
+  #     · 融合带进新候选 平均 14.8（12/12 条 query 都有增益）
+  #     · 前置已满足：B3 原文索引在（`raw_count=733`、coverage 1.0）
+  #   回滚：把本行改回 `false` 并重启桥（插件会自愈），或换回
+  #   `config.yaml.bak-libmem-routes-20261010`。
+  # 默认**关**。开启后 B4 在 Phase2 之后做「语义 + 实体 + 时间 + 词法(**原文**)」
+  # 四路**等权** RRF 融合（k=60），再交给上面的 cross-encoder 取 top-15 ——
+  # 即架构图 §四 增量 1 的形态。
+  #
+  # 实测（LoCoMo 阶段二 5,871 行库、1986 题、Qwen3.5-9B 端到端，
+  #       同 prompt(v4) / 同 ctx(routed) / 同模型 / 同一次运行）：
+  #     关：F1 0.335 · 召回 57.7% · 拒答 487 题
+  #     开：F1 0.400 · 召回 81.9% · 拒答 373 题
+  #     配对 bootstrap 95% CI [-0.0788, -0.0521]、符号检验 p=0.0000（两个都过）
+  #   检索层（1970 题）：四路等权 75.6% vs 最好单路 63.9%（+11.8）
+  #
+  # ⚠️ 前置：B3 的**原文索引**（表 `memories_fts_raw`）必须已建 ——
+  #    用 `python services/B3_header_engine/build_raw_index.py` 建/重建，
+  #    自检全绿再用。**没建时路4 会自动整路跳过**（不报错，行为与改动前一致）。
+  # ⚠️ 四路是**全开**的：实测按题类裁剪召回只覆盖 25.1%，80% 多跳题会被判错。
+  # ⚠️ **等权就是最优**：实测任何降权/加权都是负的（语义降权0.5 −2.5、
+  #    词法加权2.0 −2.4、两路里词法加权2.0 −10.7）。别去调权重。
+  routes_enabled: true
+  # 哪几路参与融合（逗号分隔，可选 semantic/entity/time/lexical）。
+  # ★ **测试端与生产端的结论不同**，所以做成可配而不是写死：
+  #   测试端（LoCoMo 英文语料）：原文 100% 可得 → 实体路纯冗余 → 用 `semantic,lexical`
+  #   生产端：`has_l3=0`（取不到原文）时**词法路整条没输入**，那时实体路是唯一的
+  #     结构化信号；时间路对中文查询（"上个月做了什么"）也比英文语料有用得多
+  #     → **先保留全部**，等真实中文流量量过再定。
+  # 依据（留一法，1970 题）：去词法 **−12.6** / 去语义 **−4.9** /
+  #                          去时间 −0.4（非显著）/ 去实体 −0.2（非显著）。
+  # 实体路被词法路吸收的原因很具体：词法路用**整篇原文**，实体路只用 20 个实体名 ——
+  # 前者是后者的超集（本语料实体表里也基本是人名）。
+  routes: semantic,entity,time,lexical
+  # 路2 的**共现约束**：一条记忆要同时命中几个种子实体才算候选。
+  # ★ 为什么需要（2026-10-01 专项诊断）：路2 的信号**按构造就是词法索引的子集** ——
+  #   `memories_fts` 的索引内容正是 `" ".join(jieba.cut(summary + core_entities))`，
+  #   而路2 排序用的就是 `core_entities`。所以"命中任一实体"与词法路必然重叠
+  #   （实测英文独占 2.2% / 中文 4.0%）。
+  #   `min_hits=2` 要求**同时**含多个种子实体 —— BM25 的词项求和表达不出这个结构信号。
+  # 依据（独占证据覆盖 = 路1 与 路4 都捞不到、只有路2 捞到）：
+  #   min_hits=1 → 英文 2.2% / 中文 4.0%
+  #   min_hits=2 → 英文 2.8% / 中文 6.0%   ← **两个语料都最优**
+  #   min_hits=3 → 英文 1.8% / 中文 2.0%
+  entity_min_hits: 2
+  # 四路融合后 cross-encoder 读**哪份文本**：
+  #   `auto`（生产默认）= `summary + core_entities`。生产里摘要跟随用户/源语言，
+  #          所以它天然与查询同语言 —— 不需要额外处理。
+  #   `raw`           = **原文**（B3 原文索引里存好的前 512 字符）。
+  #          只给"摘要语言与源语言不一致"的语料用。本仓的 LoCoMo 评测库正是如此
+  #          （摘要中文 / 原文英文 / 查询英文）：实测这一项值 **+9.8 点**
+  #          （CE 读摘要 72.0% → 读原文 81.8%，而读摘要时甚至比不重排低 3.6）。
+  # ⚠️ 它影响的是**重排这一环本身**，与 `routes_enabled` 无关。
+  rerank_doc: auto
+  # ---- 命中即扩窗（E 形态，2026-10-02）----
+  # 背景（LongMemEval 实测，同一批 500 题，唯一变量是**粒度**）：
+  #   会话粒度（一条记忆 = 一整个会话）Recall@5 89.4% / @10 91.8%
+  #   **轮级**（一条记忆 = 一轮）        Recall@5 **97.0%** / @10 **97.6%**
+  # 但**只交那一轮**会掉分：100 题分层实验里，纯轮交付在"检索本来就命中"的
+  # 对照组 **−4pp**（机制可回读：跨会话计数少算、时间线方向反、证据轮没进 top-10）。
+  # 而"**轮级排序 + 按会话补全交付**"两臂都不掉分、捞回组 **+58pp**（p<0.0001）。
+  # ⇒ 正解是「按轮排序（精度）+ 按会话补全（完整度）」。
+  #
+  # ⚠️ `expand_window: 0` = **关闭**（默认，行为与改动前逐字一致）。
+  #    读取用的是 `_cfg_int0` 而**不是** `_cfg_int` —— 后者内部是 `max(1, …)`，
+  #    会把 0=关闭**静默改成 1**（实现时实测踩到，故另加了一个允许 0 的读取函数）。
+  #
+  # ⚠️ 窗口大小**还没量过**：评测里"补全到整个会话"（~64k 字符）是验证过的形态，
+  #    而 `expand_window=2` 大约只回到 ~6k 字符（接近纯轮的 11k，而纯轮是掉分的）。
+  #    所以生产默认值应当**按字符预算**定（`expand_budget_chars`），
+  #    并在真实流量上量过再打开。**先别照抄 2。**
+  expand_window: 0
+  expand_budget_chars: 24000
+  # ---- 时间窗口优先（★ 2026-10-12 新增）----
+  # 起因（用户原话）：「我是问最近或者这几天的工作做了什么，而你排上来是几个月前的
+  # 工作，那就有问题啊」「问最近的时间或最近一周的时间，却用一个几个月前的东西，
+  # 这就很打脸，完全不能用」。
+  #
+  # 坏在哪（实测确认，不是猜）：`最近` **本来就被解析**成时间窗口
+  # （`routes.parse_time('最近这几天做了什么')` → 2026-10-05..2026-10-11），
+  # 路3 时间路也有候选，但它 ① 只出 20 条、② 与另外三路 RRF **等权**融合、
+  # ③ 之后还要过 cross-encoder（按"这条和问题像不像"打分，几个月前那些"做了什么"
+  # 的记录**照样很像**）、④ 再叠 `α·heat`，而老条目 heat 45~70、新条目只有 1~6。
+  # 于是"最近"在**每一步**都被挤下去 —— 没有任何一个环节把窗口当回事。
+  #
+  # 修法（两处）：① Phase2 与重排都加上同一份 recency 分（本块调量级）；
+  # ② 另给一条**不看相关性**的清单管道 `libmem_recent`（窗口内 + 时间倒序）。
+  # 实测 A/B（真实库，`retrieve('最近这几天做了什么')`，只读）：
+  #     关：top-10 = 2026-04-30 / 04-28 / 04-27 / …（全是几个月前）
+  #     开：top-10 = 2026-10-12 / 10-12 / 10-12 / 10-10 / …（全在窗口内）
+  recency:
+    enabled: true          # 关掉 = 逐字回到改动前（只影响"查询里有最近时间词"的那种问法）
+    default_days: 7        # "最近/这几天"没给具体范围时算多少天
+    anchor: true           # 把"最近/这几天"本身也当时间窗口锚
+    # 量级：窗口内 +0.35（可理解为"允许盖过 0.35 的相似度差"）。
+    # 为什么这个数够用又不危险：heat 打满也才 0.1，而新老条目的真实 sim 差通常 <0.2；
+    # 同时"完全不相关但很新"的内容 sim 差一般 >0.4，翻不过来。
+    window_base: 0.35
+    today_bonus: 0.20      # 窗口内"最新那一天"再抬一档 → 清单按天成簇，而不是散点
+    decay: 0.01            # 窗口外按天衰减
+    decay_floor: -0.30     # 衰减下限：窗口外不许一棍子打死（最近几天没内容时给稍早的）
+    cluster: true          # 窗口内按"最新一天"成簇
+    window_only: false     # true = 窗口外直接移出候选池（更狠；先不默认开，量过再说）
+    window_cap: 120        # window_only=true 时窗口内最多保留多少条
+  # 重排服务地址与模型名（一般无需改）
+  # rerank_base: http://127.0.0.1:18098
+  # rerank_model: bge-reranker-v2-m3
+  # 嵌入后端：只有 llama.cpp 的 bge-m3（127.0.0.1:18099，实测 18~96ms）。
+  # 2026-09-22 统一模型服务后 Ollama 兜底已移除，这个键**已不再被读取**，
+  # 保留只是为了老配置不至于报未知键。llama 挂了会直接落 hash 兜底。
+  embed_backend: llama
+  # 启动 llama 嵌入服务：dsh-cold-memory-watcher\bin\start-bge-embed.ps1
+  embed_llama_base: http://127.0.0.1:18099
+providers:
+  deepseek:
+    base_url: https://api.deepseek.com
+    models:
+    - deepseek-v4-pro
+    - deepseek-v4-flash
+    - deepseek-chat
+    - deepseek-reasoner
+    name: DeepSeek
+  glm:
+    base_url: https://open.bigmodel.cn/api/paas/v4
+    models:
+    - glm-4
+    - glm-4-flash
+    - glm-4-plus
+    name: 智谱 GLM
+  kimi:
+    base_url: https://api.moonshot.cn/v1
+    models:
+    - moonshot-v1-8k
+    - moonshot-v1-32k
+    - moonshot-v1-128k
+    name: Kimi (月之暗面)
+  qwen:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    models:
+    - qwen-max
+    - qwen-plus
+    - qwen-turbo
+    name: 通义千问
+server:
+  api_host: 127.0.0.1
+  api_port: 8766
+  indexer_knowledge_port: 8933
+  indexer_memory_port: 8932
+watcher:
+  auto_skip_small_talk: true
+  enabled: true
+  min_user_chars: 10
+b6_map_protocol:
+  # 架构书 §5.8：「validator：JSON Schema + 空字段检测 + 自动重试 1 次 +
+  # 连续失败 2 次路由 flash」。
+  #
+  # 第 4 条**没有按原样实现**：路由 flash 需要云端 API key，用户已明确不提供
+  # （llm.large.api_key 仍是占位符（发布版默认留空））。
+  # 所以改成「本地降级」：返回合法的空响应 + degraded=true + degraded_reason，
+  # 并写 B7 审计。留这个开关是为了让这个决定**可见可改**，而不是藏在代码里。
+  #   local_degrade（默认）= 本地降级，降级原因显式返回
+  #   disabled           = 同上（语义上表示这条兜底路径关掉）
+  # 不接云端的原因与取舍见 services/B6_map_protocol/protocol.py: _degrade_response
+  flash_routing: local_degrade

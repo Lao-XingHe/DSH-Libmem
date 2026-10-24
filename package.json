@@ -1,0 +1,55 @@
+{
+  "name": "dsh-libmem",
+  "version": "1.0.0",
+  "description": "基于图书馆系统 LIS 做的长期记忆系统插件：自动回忆、语义检索、对话落盘",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "memory",
+    "long-term-memory",
+    "sqlite",
+    "fts5",
+    "bge-m3"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./config": "./lib/config.js",
+    "./service": "./lib/service.js",
+    "./client": "./lib/client.js",
+    "./tools": "./lib/tools.js",
+    "./recall": "./lib/recall.js",
+    "./write": "./lib/write/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "bin",
+    "assets",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "verify": "node bin/verify-libmem.mjs",
+    "verify:offline": "node bin/verify-libmem.mjs --port 8770",
+    "verify:copy": "node bin/verify-libmem.mjs --check-copy",
+    "setup-links": "node bin/setup-links.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "license": "PolyForm-Noncommercial-1.0.0"
+}
