@@ -15,7 +15,7 @@
 
 **手动预演**：
 ```powershell
-python -X utf8 "D:\Deepseek Harness\dsh-cold-memory-watcher\bin\decay_memory.py" --apply --migrate-layers
+python -X utf8 "<UPSTREAM_DIR>\bin\decay_memory.py" --apply --migrate-layers
 # 预期：hot 从 734 降到 ≈29（真有热度的那些），cold 从 34 升到 ≈739
 ```
 

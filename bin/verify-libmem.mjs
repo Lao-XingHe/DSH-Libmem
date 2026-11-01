@@ -29,7 +29,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PACKAGE = path.join(HERE, '..')
 const WRITE_DIR = path.join(PACKAGE, 'lib', 'write')
-const UPSTREAM_DIR = 'D:\\Deepseek Harness\\dsh-cold-memory-watcher\\lib'
+const UPSTREAM_DIR = '<UPSTREAM_DIR>\\lib'
 /** 自检自己的状态目录（绝不写包根的真状态文件）。 */
 const STATE_DIR = path.join(PACKAGE, '.verify')
 
@@ -238,8 +238,8 @@ async function main () {
     // 发布版的默认值是空的（不能写死作者机器上的路径），所以自检必须像
     // 「一台已配置好的机器」那样显式给值。换机器时用环境变量覆盖。
     python: process.env.LIBMEM_PYTHON ||
-      'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe',
-    projectRoot: process.env.LIBMEM_PROJECT_ROOT || 'D:\\Deepseek Harness\\dsh-libmem\\v2',
+      '<USER>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe',
+    projectRoot: process.env.LIBMEM_PROJECT_ROOT || '<DSH_WORKSPACE>\\dsh-libmem\\v2',
     manageProcess: !reuse,
     reuseExisting: true,
     bridgePoller: false,           // 验证期不要让第二个进程抢温提炼
@@ -267,7 +267,7 @@ async function main () {
   try { writeStatus = JSON.parse(fs.readFileSync(writeStatusFile, 'utf8')) } catch {}
   check(writeStatus?.plugin === 'libmem-write', '写入侧已挂载且状态落自检目录', writeStatusFile)
   const mountLine = captured.find((line) => line.includes('写入侧已挂载')) ?? ''
-  check(mountLine.includes('root=D:\\Deepseek Harness\\dsh-libmem\\v2'),
+  check(mountLine.includes('root=<DSH_WORKSPACE>\\dsh-libmem\\v2'),
     '写入侧 projectRoot 兜底生效（没被空串覆盖）', mountLine.trim())
   check(writeStatus?.pairsWritten === 0, '写入侧未产生任何落盘（验证期零副作用）')
 

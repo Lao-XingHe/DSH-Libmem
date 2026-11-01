@@ -2186,7 +2186,7 @@ def retrieve(
     # ⚠️ 2026-09-26 加这个参数，是因为发现 **`final_topk` 被静默钳到 20**：
     # 老代码这一行是硬编码常量 `_TOPK_PHASE2 = 20`，于是
     # `retrieve(max_items=60, final_topk=60)` 只会拿回 20 条，**不报错、不告警**。
-    # 实测（D:\Deepseek Harness\locomo-full\stage2，5,871 行）：
+    # 实测（<DSH_WORKSPACE>\locomo-full\stage2，5,871 行）：
     #   final_topk=15 → 15 条；final_topk=30/60/200 → 全都是 20 条。
     # 危害不止"少给几条"：所有**依赖大池子**的机制会静默失效 ——
     #   * MMR 的 `mmr_pool=60`、cross-encoder 重排序要的都是百级池子；

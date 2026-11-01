@@ -1,7 +1,7 @@
 """V1 → V2 冷/温记忆数据迁移
 
 源目录：
-  冷记忆: C:/Users/admin/Documents/trae_projects/admin/shufang-os/backend/data/cold_vault/
+  冷记忆: <OLD_DATA_ROOT>/backend/data/cold_vault/
   温记忆: 同上 .../warm/
 
 目标：services/B3_header_engine SQLite memories 表 + B7 audit_log
@@ -12,8 +12,8 @@ import sys, os, json, argparse, uuid, hashlib, datetime, re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-COLD_DIR = r"C:\Users\admin\Documents\trae_projects\admin\shufang-os\backend\data\cold_vault"
-WARM_DIR = r"C:\Users\admin\Documents\trae_projects\admin\shufang-os\backend\data\warm"
+COLD_DIR = r"<OLD_DATA_ROOT>\backend\data\cold_vault"
+WARM_DIR = r"<OLD_DATA_ROOT>\backend\data\warm"
 
 
 def _load_jsonl(path: str) -> list[dict]:

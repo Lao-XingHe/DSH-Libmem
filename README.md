@@ -97,10 +97,10 @@ dsh plugin --profile desktop add link:<插件目录>
   disabled: false
   config:
     python: 'C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe'
-    projectRoot: 'D:\Deepseek Harness\dsh-libmem\v2'      # 必须含 config.yaml
+    projectRoot: '<DSH_WORKSPACE>\dsh-libmem\v2'      # 必须含 config.yaml
     write:
       enabled: true
-      projectRoot: 'D:\Deepseek Harness\dsh-libmem\v2'
+      projectRoot: '<DSH_WORKSPACE>\dsh-libmem\v2'
       poll: true
 ```
 
@@ -179,21 +179,21 @@ Python 侧只新增两个文件（都在 `dsh-libmem/v2/services/C2_mcp_server/`
 ```yaml
 - insert:
     - id: libmem
-      name: 'D:\Deepseek Harness\dsh-libmem\lib\index.js'
+      name: '<DSH_WORKSPACE>\dsh-libmem\lib\index.js'
       config:
-        python: 'C:\Users\admin\AppData\Local\Programs\Python\Python312\python.exe'
-        projectRoot: 'D:\Deepseek Harness\dsh-libmem\v2'
+        python: '<USER>\AppData\Local\Programs\Python\Python312\python.exe'
+        projectRoot: '<DSH_WORKSPACE>\dsh-libmem\v2'
         port: 8768
         bridgePoller: true          # ★ 必须 true，否则温提炼不再触发（不报错，只是搜不到新记忆）
         toolPrefix: 'libmem'
         write:
           enabled: true
-          projectRoot: 'D:\Deepseek Harness\dsh-libmem\v2'
-          statusFile:  'D:\Deepseek Harness\dsh-libmem\watch-status.json'
-          pollStateFile: 'D:\Deepseek Harness\dsh-libmem\poll-state.json'
+          projectRoot: '<DSH_WORKSPACE>\dsh-libmem\v2'
+          statusFile:  '<DSH_WORKSPACE>\dsh-libmem\watch-status.json'
+          pollStateFile: '<DSH_WORKSPACE>\dsh-libmem\poll-state.json'
 ```
 
-实际生效的两份：`C:\Users\admin\.dsh\profiles\desktop\cordis.patch.yml`（桌面端在读）
+实际生效的两份：`<USER>\.dsh\profiles\desktop\cordis.patch.yml`（桌面端在读）
 与 `...\web\cordis.patch.yml`（CLI `dsh web` 用）。两份都保留了下线旧挂载的注释块，回滚
 就是把注释去掉、把 `libmem` 行删掉 —— **不要同时开着**，两边都提供记忆工具面。
 
@@ -207,7 +207,7 @@ Python 侧只新增两个文件（都在 `dsh-libmem/v2/services/C2_mcp_server/`
 |---|---|---|
 | `enabled` | `true` | 整插件开关 |
 | `python` | Python 3.12 绝对路径 | **不要写裸 `python`**：PATH 里别的解释器排前面会让服务起不来 |
-| `projectRoot` | `D:\Deepseek Harness\dsh-libmem\v2` | 服务 cwd，必须含 `config.yaml`（路径解析的根） |
+| `projectRoot` | `<DSH_WORKSPACE>\dsh-libmem\v2` | 服务 cwd，必须含 `config.yaml`（路径解析的根） |
 | `host` / `port` | `127.0.0.1` / `8768` | 桥的监听地址 |
 | `manageProcess` | `true` | `false` = 只连已有服务，绝不自己起 |
 | `reuseExisting` | `true` | 端口上已有健康的 LibMem 服务就复用（按 `/health` 的 `service` 字段认身份） |
@@ -280,7 +280,7 @@ Python 侧只新增两个文件（都在 `dsh-libmem/v2/services/C2_mcp_server/`
 
 **嵌套默认值的坑（已修）**：`write` 是嵌套 schema，校验器会把**未提供**的字段填成
 `WriteConfig` 自己的默认值 —— 那些是空串，会覆盖掉插件里配好的真实路径。空串在写入侧
-的含义是「自己去猜」，而会话 cwd 是 `D:\Deepseek Harness`（那里没有 `config.yaml`），
+的含义是「自己去猜」，而会话 cwd 是 `<DSH_WORKSPACE>`（那里没有 `config.yaml`），
 猜不出来就**一条也不记**。所以 `lib/index.js` 对 `projectRoot` / `statusFile` /
 `pollStateFile` 三个字段显式兜底；`vault` 与 `pollRoot` 留空是**有意的**。
 
@@ -315,15 +315,15 @@ Python 侧只新增两个文件（都在 `dsh-libmem/v2/services/C2_mcp_server/`
 
 ```powershell
 # 自检（副本比对 + schema 编译 + 真起一个桥 + 逐个调工具 + 卸载）
-node D:\Deepseek Harness\dsh-libmem\bin\verify-libmem.mjs            # 自起桥，端口 8770
-node D:\Deepseek Harness\dsh-libmem\bin\verify-libmem.mjs --check-copy   # 只比对写入侧副本
-node D:\Deepseek Harness\dsh-libmem\bin\verify-libmem.mjs --port 8768 --reuse   # 只连线上服务
+node <DSH_WORKSPACE>\dsh-libmem\bin\verify-libmem.mjs            # 自起桥，端口 8770
+node <DSH_WORKSPACE>\dsh-libmem\bin\verify-libmem.mjs --check-copy   # 只比对写入侧副本
+node <DSH_WORKSPACE>\dsh-libmem\bin\verify-libmem.mjs --port 8768 --reuse   # 只连线上服务
 
 # 模型服务真探活（嵌入 / 重排，**不是**探端口）
 Invoke-RestMethod http://127.0.0.1:8768/health/models | ConvertTo-Json -Depth 5
 
 # 检索阈值护栏的自检（造"所有候选都低于阈值"的场景）
-python D:\Deepseek Harness\scratch\_verify_threshold_fallback.py
+python <DSH_WORKSPACE>\scratch\_verify_threshold_fallback.py
 ```
 
 排障顺序：

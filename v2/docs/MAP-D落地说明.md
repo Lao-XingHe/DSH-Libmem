@@ -1,6 +1,6 @@
 # MAP-D 委派协议 · 落地说明
 
-> 2026-09-25 ｜ 规范：[主Agent委派协议_MAP-D_v0.1.md](file:///C:/Users/admin/Desktop/书房OS-DSH大迁移/主Agent委派协议_MAP-D_v0.1.md)
+> 2026-09-25 ｜ 规范：[主Agent委派协议_MAP-D_v0.1.md](file:///<USER>/Desktop/书房OS-DSH大迁移/主Agent委派协议_MAP-D_v0.1.md)
 > 结论：**MAP-D 的运行时机制由 dsh 原生 subagent 完整提供，本项目不重造协议层**，
 > 只做两件事 —— ① 挂载并路由到小模型；② 守住「工具过程不沉淀进记忆库」。
 >
@@ -12,8 +12,8 @@
 
 | # | 文件 | 改动 | 对应 MAP-D 条款 |
 |---|------|------|----------------|
-| 1 | `C:\Users\admin\.dsh\profiles\web\cordis.patch.yml` | 新增 `- insert:` 块，挂载 `dsh-subagent` + `dsh-subagent-spawn-in-process` + `dsh-tool-subagent`，子级路由到本地 `llama-local` 的 `Qwen3.6-35B-A3B-UD-IQ3_S` | §2 三层角色、§5 小模型路由 |
-| 2 | `D:\Deepseek Harness\dsh-cold-memory-watcher\lib\index.js` | `session/event` 钩子加子会话守卫：`header.origin === 'subagent'` 或 `header.parentSession` 存在 → 跳过，不写冷库 | §7 记忆沉淀规则、§1.1 记忆污染 |
+| 1 | `<USER>\.dsh\profiles\web\cordis.patch.yml` | 新增 `- insert:` 块，挂载 `dsh-subagent` + `dsh-subagent-spawn-in-process` + `dsh-tool-subagent`，子级路由到本地 `llama-local` 的 `Qwen3.6-35B-A3B-UD-IQ3_S` | §2 三层角色、§5 小模型路由 |
+| 2 | `<UPSTREAM_DIR>\lib\index.js` | `session/event` 钩子加子会话守卫：`header.origin === 'subagent'` 或 `header.parentSession` 存在 → 跳过，不写冷库 | §7 记忆沉淀规则、§1.1 记忆污染 |
 
 ### 为什么不自造 Python 协议层
 
@@ -115,14 +115,14 @@ MAP-D §4 的 `should_delegate(task)` 是**主 Agent 的判断依据**，不是�
 **本轮只做了静态验证**（见第六节末）。运行时验证需要重启 dsh：
 
 1. **重启 dsh harness**（profile 改动需要重新加载）。
-2. **确认挂载成功**：读 `D:\Deepseek Harness\dsh-hybrid-gateway\load-status.json`，
+2. **确认挂载成功**：读 `<DSH_WORKSPACE>\dsh-hybrid-gateway\load-status.json`，
    以及 dsh 启动日志里 plugin 加载无报错。
    - 若 `agentOptions` 或 `provider: spawn` 写错，会**在挂载时报错**（不是静默失败）——
      这是好事，说明配置错了能立刻发现。
 3. **试一次委派**：让主 Agent 做一件"多步高噪声"的事（如"帮我查一下 X 并汇总"），
    观察它是否调用 `subagent` 工具、子级是否走了本地 35B。
 4. **确认子会话没污染记忆库**：读
-   `D:\Deepseek Harness\dsh-cold-memory-watcher\watch-status.json`，
+   `<UPSTREAM_DIR>\watch-status.json`，
    看 `subagentEventsSkipped`：
    - `> 0` → 守卫生效（子会话事件确实到达了钩子，且被拦下）
    - `== 0` → 两种可能：没委派，或 dsh 没把子会话派发到全局钩子（则本来就没污染）

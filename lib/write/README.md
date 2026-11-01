@@ -7,7 +7,7 @@
 
 ## 它是副本，不是新代码
 
-6 个文件全部来自 `D:\Deepseek Harness\dsh-cold-memory-watcher\lib\`（2026-09-30 版，
+6 个文件全部来自 `<UPSTREAM_DIR>\lib\`（2026-09-30 版，
 当时的 `verify` 套件四支全绿）。**除下面 4 处字面量外，代码逐字节相同**：
 
 | 文件 | 行 | 改动 | 原因 |
@@ -37,7 +37,7 @@
 
 ```powershell
 # 看差异
-fc.exe /L "D:\Deepseek Harness\dsh-cold-memory-watcher\lib\poller.js" "D:\Deepseek Harness\dsh-libmem\lib\write\poller.js"
+fc.exe /L "<UPSTREAM_DIR>\lib\poller.js" "<DSH_WORKSPACE>\dsh-libmem\lib\write\poller.js"
 
 # 确认上游改动是有意为之之后：重新复制 5 个未改动文件 + 按上表重做 index.js 的 4 处改动
 ```

@@ -62,7 +62,7 @@ MCP / FastAPI / CLI 都汇合到 service 层，校验/升温/审计只在那里�
 
 ---
 
-## 插件目录（`D:\Deepseek Harness\dsh-cold-memory-watcher\`）
+## 插件目录（`<UPSTREAM_DIR>\`）
 
 ### 新建
 

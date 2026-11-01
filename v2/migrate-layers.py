@@ -18,8 +18,8 @@ import sys, os, json, hashlib, sqlite3, datetime, argparse, shutil
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-V1_WARM_DIR = r"C:\Users\admin\Documents\trae_projects\admin\shufang-os\backend\data\warm"
-V1_COLD_DIR = r"C:\Users\admin\Documents\trae_projects\admin\shufang-os\backend\data\cold_vault"
+V1_WARM_DIR = r"<OLD_DATA_ROOT>\backend\data\warm"
+V1_COLD_DIR = r"<OLD_DATA_ROOT>\backend\data\cold_vault"
 
 
 def _md5_prefix(s: str) -> str:

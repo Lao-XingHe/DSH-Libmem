@@ -1,6 +1,6 @@
 # Phase 2 验收报告 · B6 Validator + 热度衰减 + 6 Bug 修复
 
-> 交接来源：`D:\Deepseek Harness\NEXT-待办-B6验证器与热度衰减.md`（2026-09-22 完成报告）
+> 交接来源：`<DSH_WORKSPACE>\NEXT-待办-B6验证器与热度衰减.md`（2026-09-22 完成报告）
 > 复现日期：2026-09-23
 > 验收标准：三个 verify 脚本 **ALL CHECKS PASSED**，且全程隔离临时库 + 自清理（真库前后不变）
 
@@ -118,7 +118,7 @@ decay_memory.py → sqlite3 在线备份（走 WAL）→ decay-run.ps1 → wscri
 
 ## 五、真库隔离证明
 
-三个 verify 脚本全程在临时库跑（`SHUFANG_DATA_DIR=C:\Users\admin\AppData\Local\Temp\*`），真库：
+三个 verify 脚本全程在临时库跑（`SHUFANG_DATA_DIR=<USER>\AppData\Local\Temp\*`），真库：
 - **verify-b6**：自清理代码还原 heat/count 到运行前（sum(heat) 前后相等）
 - **verify-decay / verify-reindex-heat**：SHUFANG_DATA_DIR 重定向，真库全程旁观
 
