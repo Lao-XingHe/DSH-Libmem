@@ -1,6 +1,6 @@
 {
   "name": "dsh-libmem",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "基于图书馆系统 LIS 做的长期记忆系统插件：自动回忆、语义检索、对话落盘",
   "keywords": [
     "dsh",

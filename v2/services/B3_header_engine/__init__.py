@@ -1,7 +1,7 @@
 """B3 表头引擎 — SQLite 主索引"""
 from .sqlite_store import (
     init_db, ensure_schema, get_conn, insert_memory, bulk_insert,
-    update_heat_count, update_layer, update_heat_all,
+    update_heat_count, update_heat_count_many, update_layer, update_heat_all,
     phase1_filter, list_all_members, get_heat_percentile,
     count_total, get_by_id, get_layer_distribution, is_sqlite_ready,
     get_by_ids,

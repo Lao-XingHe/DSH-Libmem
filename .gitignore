@@ -1,19 +1,34 @@
-# 运行时 / 数据 / 状态 —— 永远不进仓库
-v2/data/
+# Junction to the profile's @deepseek-ai packages (not vendored here).
+node_modules/
+
+# 自检脚本的临时状态（bin/verify-libmem.mjs 全部写这里，不碰包根的真状态文件）。
 .verify/
+
+# 运行时心跳 / 服务状态 / 日志 —— 每台机器都不一样，永远不是源码。
 status.json
 watch-status.json
 poll-state.json
-model-autoload.json
 libmem-bridge.log
-*.log
-__pycache__/
-*.pyc
-node_modules/
+libmem-bridge.err.log
+libmem-bridge.out.log
+
+# ==== 2026-11-01（v1.1.0）：数据目录整体排除 ====
+# v2/data 里是这个用户的**全部记忆**：header.db、冷库 jsonl、审计、导出。
+# 推上去 = 公开私人对话。整目录排除，不给"某一类文件忘了写"的机会。
+v2/data/
+data/
+backups/
 *.db
 *.db-wal
 *.db-shm
 *.jsonl
+*.zst
 
-# 本地配置（拷 config.example.yaml 改名即可）
-v2/config.local.yaml
+# 私版款目表：本机项目名/人名/自造词，只在本机存在；公版 general.yaml 才跟着仓库走。
+private.yaml
+authority/private.yaml
+
+# 本地改文件前留的备份（*.bak-日期），永远不是源码。
+*.bak
+*.bak-*
+

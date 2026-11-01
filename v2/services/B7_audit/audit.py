@@ -57,8 +57,18 @@ class AuditLogger:
         actor: str = "agent",
         trace_id: str = "",
         decided_by: str = "user",
+        conn=None,
     ) -> str:
-        """写一条审计记录。返回 trace_id。"""
+        """写一条审计记录。返回 trace_id。
+
+        `conn`：由调用方给出时复用**这条**连接且不关闭它 —— 一次检索要写
+        `search` + `write(heat)` 两条记录，原先各开一次连接（每次含 3 条 PRAGMA），
+        而 B4 的升温写库也要连接。2026-10-28 起这三笔副作用共用一条连接。
+
+        刻意**不做**"丢给后台线程"的异步化：审计是证据链，丢了就等于没发生，
+        而 B6 的"重试不重复升温"正是靠它和升温同 trace 落盘来证明的。
+        省时间靠减少连接往返，不靠放弃落盘。
+        """
         if action not in ACTIONS:
             # 非标准动作也允许（扩展），但记个 warning
             pass
@@ -77,11 +87,12 @@ class AuditLogger:
             trace_id, request_id, session_id, _now_iso(), actor, action,
             hs_json, payload_ref, decided_by, ihash,
         )
-        conn = self._get_conn()
+        conn_ = conn if conn is not None else self._get_conn()
         try:
-            conn.execute(sql, row)
+            conn_.execute(sql, row)
         finally:
-            conn.close()
+            if conn is None:
+                conn_.close()
         return trace_id
 
     # ---------- 便捷方法（全动作覆盖） ----------

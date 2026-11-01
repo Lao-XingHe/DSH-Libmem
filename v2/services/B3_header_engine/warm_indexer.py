@@ -345,6 +345,35 @@ def index_warm(dry_run: bool = False, prune: bool = False) -> dict:
     result["new_rows"] = after - before
     result["layers"] = get_layer_distribution()
 
+    # ★ P1（2026-10-24）：同步写馆藏对象（items/descriptions）—— 标目在入库时产生。
+    #   失败**绝不影响索引**：标目是旁路，坏了最多是这一批查不到分类/主题词。
+    try:
+        from services.B8_catalog import upsert_many
+        result["catalogued"] = upsert_many(memories)
+    except Exception as error:  # noqa: BLE001
+        result["catalogued"] = f"failed: {type(error).__name__}: {error}"
+        print(f"  [catalog] 标目写入失败（不影响索引）: {error}", file=sys.stderr)
+
+    # ★ L1（2026-11-01）：引文边 —— 四法里唯一缺的那一种。
+    #   同样**绝不拖垮索引**：引文是旁路，坏了最多是这条查不到"从哪来"。
+    #   幂等（主键 from_id+to_id+kind），重索引跑多次不会长出重复边。
+    try:
+        from services.B8_catalog.citations import link_many as _link_citations
+        result["citations"] = _link_citations(memories)
+    except Exception as error:  # noqa: BLE001
+        result["citations"] = f"failed: {type(error).__name__}: {error}"
+        print(f"  [citation] 引文边写入失败（不影响索引）: {error}", file=sys.stderr)
+
+    # 新记忆落库 → 实体倒排索引必须重建（否则覆盖面自检数的是旧库）。
+    # 见 collocate._entity_index 的注释：缓存不能用 write_epoch 失效，
+    # 因为检索升温也会写库；只有**新增记忆**才需要重建。
+    try:
+        from services.B8_catalog.collocate import invalidate_entity_index
+        invalidate_entity_index()
+        result["entity_index_invalidated"] = True
+    except Exception:  # noqa: BLE001 - 缓存清不掉最多陈旧两分钟（有 TTL 兜底）
+        result["entity_index_invalidated"] = False
+
     # 2026-09-24 A4 修复：重索引后清 B4 进程内候选向量缓存。
     # 原缓存键只用 memory_id，重提炼后 summary/core_entities 变了但还拿旧向量。
     # 现在缓存文本感知，但整个 index_warm 跑完后全清一次最稳 —— 进程内缓存重建一次比

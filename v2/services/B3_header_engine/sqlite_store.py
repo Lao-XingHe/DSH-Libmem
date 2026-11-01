@@ -362,6 +362,53 @@ def update_heat_count(memory_id: str, heat_delta: float = 0.0,
         conn.close()
 
 
+def update_heat_count_many(pairs: list, conn=None) -> int:
+    """批量升温：**一条连接、一个事务**。返回实际更新到的行数。
+
+    为什么需要它（2026-10-28）：一次检索交付 8 条记忆，`_apply_retrieval_heat`
+    原先对每条各调一次 `update_heat_count` —— 而每次调用都要
+    `sqlite3.connect` + 3 条 PRAGMA + `close`。16 次连接往返（读一次、写一次）
+    实测占掉 ~30ms，是"热检索 240ms 里检索之外那 54ms"的大头。
+
+    语义与逐条调用**完全一致**：同一条 SQL、同样的 `MAX(0, …)` 与
+    `last_hit_epoch` 只在升温时刷新的规则，只是把 N 次连接变成 1 次。
+    `conn` 由调用方给出时不关闭（让它与 B7 审计复用同一条连接）。
+    """
+    pairs = [p for p in (pairs or []) if p and p[0]]
+    if not pairs:
+        return 0
+    own_conn = conn is None
+    conn = conn or get_conn()
+    sql = """UPDATE memories
+             SET heat = MAX(0, heat + ?),
+                 count = count + ?,
+                 updated_at = ?,
+                 last_hit_epoch = CASE WHEN ? THEN ? ELSE last_hit_epoch END
+             WHERE memory_id = ?"""
+    now = _now_iso()
+    ts = time.time()
+    updated = 0
+    try:
+        conn.execute("BEGIN")
+        for memory_id, heat_delta, count_delta in pairs:
+            touch = heat_delta > 0
+            cur = conn.execute(sql, (heat_delta, count_delta, now,
+                                     1 if touch else 0, ts, memory_id))
+            if cur.rowcount > 0:
+                updated += 1
+        conn.execute("COMMIT")
+        return updated
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:  # noqa: BLE001 - 回滚失败不掩盖原始异常
+            pass
+        raise
+    finally:
+        if own_conn:
+            conn.close()
+
+
 def update_layer(memory_id: str, new_layer: str, touch: bool = True) -> bool:
     """层迁移：cold → warm → hot
 

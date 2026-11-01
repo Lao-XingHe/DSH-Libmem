@@ -312,6 +312,77 @@ def _candidate_text(r: dict) -> str:
     return ((r.get("summary") or "") + " " + " ".join(r.get("core_entities") or [])).strip()
 
 
+# ---------- 交付层近似去重（2026-10-24）----------
+#
+# 问题（实测）：同一段对话被提炼成两条摘要时，两条会**一起被召回** —— 记忆库的
+# top-1 / top-2 就是两条几乎一样的"梳理记忆插件状态"，一次交付 5 个名额被吃掉 3 个。
+# 状态机治不了这个（两条的 heat/count 本来就相近），必须在**交付层**只留一条。
+#
+# 判定用字符 bigram 的 Jaccard：不调模型、不依赖向量缓存，中文按字切足够用；
+# 只对"已经排好序的最终列表"做，成本 = O(交付条数²)，可忽略。
+def _bigrams(text: str) -> set:
+    t = re.sub(r"\s+", "", (text or "").lower())
+    if len(t) <= 1:
+        return {t} if t else set()
+    return {t[i:i + 2] for i in range(len(t) - 1)}
+
+
+def _near_dup_text(a: str, b: str, threshold: float) -> bool:
+    ga, gb = _bigrams(a), _bigrams(b)
+    if not ga or not gb:
+        return False
+    return len(ga & gb) / len(ga | gb) >= threshold
+
+
+def dedupe_near(items: list, threshold: float = 0.9,
+                stats: Optional[dict] = None) -> list:
+    """同一批交付里，近似重复**只保留排在前面的那条**（保序）。
+
+    被丢掉的不删库、不降权，只是这次不再占名额；下次检索仍可能作为替补出现 ——
+    避免"误判即丢数据"，也避免重复条目在库里被反复加热。
+
+    2026-10-28 性能：原先每条与已保留的每一条两两比 Jaccard，而 `_bigrams()`
+    **在每一对里都把两边重算一遍**（30 条 → 约 435 对 → 870 次 `re.sub` + 建 set，
+    实测 13.5ms）。这里改成：
+
+      * bigram 集合**每条只建一次**（O(n) 次正则，而不是 O(n²) 次）；
+      * 先做长度比预筛 —— 集合 Jaccard 有硬上界 `J(A,B) ≤ min(|A|,|B|)/max(|A|,|B|)`，
+        比值不超过阈值的一对**不可能达标**，一次除法就能跳过绝大多数 pair；
+      * 用 `|A∩B| / (|A|+|B|−|A∩B|)` 算 Jaccard，不再构造并集。
+
+    判定口径与旧实现对同一输入**逐条等价**（scratch/verify_dedupe_equiv.py 校验）。
+    """
+    kept, dropped = [], []
+    # 与 kept 平行：(bigram 集合, 基数) —— 只算一次，供后续所有 pair 复用
+    kept_bags: list[tuple[frozenset, int]] = []
+    for it in items:
+        bags = _bigrams(_candidate_text(it))
+        size = len(bags)
+        dup = False
+        if size:
+            for other, other_size in kept_bags:
+                # 长度比预筛：J ≤ min/max，比值低于阈值时必然不达标
+                if size < other_size:
+                    if size / other_size < threshold:
+                        continue
+                elif other_size / size < threshold:
+                    continue
+                inter = len(bags & other)
+                if inter and inter / (size + other_size - inter) >= threshold:
+                    dup = True
+                    break
+        if dup:
+            dropped.append(it.get("memory_id"))
+            continue
+        kept.append(it)
+        kept_bags.append((bags, size))
+    if stats is not None:
+        stats["near_dedupe"] = {"enabled": True, "threshold": threshold,
+                                "kept": len(kept), "dropped": len(dropped),
+                                "dropped_ids": dropped[:10]}
+    return kept
+
+
 def _llama_embed_batch(texts: list, timeout: float = 60.0) -> list:
     """调 llama.cpp 的 OpenAI 兼容批量接口 /v1/embeddings。
 
@@ -955,7 +1026,8 @@ def _describe_recency(window: Optional[dict], scores: dict, candidates: list) ->
 
 def phase2_rank(query_text: str, candidates: list[dict],
                 top_k: int = _TOPK_PHASE2, stats: Optional[dict] = None,
-                recency: Optional[dict] = None) -> list[dict]:
+                recency: Optional[dict] = None,
+                bonus_map: Optional[dict] = None) -> list[dict]:
     """Phase2：候选集内精排（向量相似度 + heat/count 加权 + **时间窗口优先**）
 
     score = sim + α·heat + β·count + recency
@@ -1041,9 +1113,10 @@ def phase2_rank(query_text: str, candidates: list[dict],
         rec = r_scores.get(mid, 0.0)
         recent = _recent_bonus(r, time.time())      # ★ V1.1
 
-        # score = sim + α·heat + β·count + recency + ★近期（V1.1）
+        # score = sim + α·heat + β·count + recency + ★近期（V1.1）+ ★标目加分（P0'）
         score = (sim + _ALPHA * min(1.0, heat / _HEAT_NORM)
-                 + _BETA * min(1.0, count / _COUNT_NORM) + rec + recent)
+                 + _BETA * min(1.0, count / _COUNT_NORM) + rec + recent
+                 + (float((bonus_map or {}).get(mid, 0.0))))
 
         row = dict(r)
         row["_sim"] = round(sim, 4)
@@ -1409,7 +1482,8 @@ def _rerank_docs(head: list, doc_source: str = 'auto') -> list:
 def rerank_top(query_text: str, ranked: list, pool: int,
                stats: Optional[dict] = None, doc_source: str = 'auto',
                recency_map: Optional[dict] = None,
-               recency_pool_first: bool = True) -> list:
+               recency_pool_first: bool = True,
+               bonus_map: Optional[dict] = None) -> list:
     """用 cross-encoder 重排 ``ranked[:pool]``，返回整体重排后的列表。
 
     尾部（``ranked[pool:]``）保持原序接在后面 —— 后续 `budget_clip` 是**保序截断**，
@@ -1510,7 +1584,7 @@ def rerank_top(query_text: str, ranked: list, pool: int,
         it["_final_score"] = round(
             rel + _ALPHA * min(1.0, heat / _HEAT_NORM)
                 + _BETA * min(1.0, cnt / _COUNT_NORM)
-                + rec + recent, 6)
+                + rec + recent + float((bonus_map or {}).get(it.get("memory_id"), 0.0)), 6)
         out.append(it)
     # `_score` 保持 Phase2 原值不动（审计/对照实验依赖它）；
     # 这里的稳定排序保证同分者维持 Phase2 原序。
@@ -2348,8 +2422,24 @@ def retrieve(
         }
         _recency_map = recency_scores(candidates, _recency_window, cfg=_recency_cfg)
 
+    # ★ P0'（2026-10-24）：标目加分表 —— 只抬命中「专指标目词」的条目，不改变融合结构。
+    #   ⚠️ 默认关闭（`retrieval.catalog_bonus: 0`）：两套基准实测无收益（见 B8 注释）；
+    #   这条通路保留待用，别以为它在生效。
+    _catalog_bonus_map = {}
+    _bonus_cfg = _cfg_float('catalog_bonus', 0.0)
+    if _bonus_cfg > 0:
+        try:
+            from services.B8_catalog import query_bonus_map
+            _catalog_bonus_map = query_bonus_map(query_text, bonus=_bonus_cfg)
+        except Exception:  # noqa: BLE001 - 旁路增强，坏了不影响检索
+            _catalog_bonus_map = {}
+    rank_stats['catalog_bonus'] = {'enabled': _bonus_cfg > 0,
+                                   'items': len(_catalog_bonus_map),
+                                   'value': _bonus_cfg}
+
     ranked = phase2_rank(query_text, candidates, top_k=_phase2_topk, stats=rank_stats,
-                         recency=_recency_map if _recency_map else ({} if recency is False else None))
+                         recency=_recency_map if _recency_map else ({} if recency is False else None),
+                         bonus_map=_catalog_bonus_map)
     total_ranked = len(ranked)
 
     # ---- 伪相关反馈（PRF）：用第一轮 top-N 的实体再扩一轮候选（第 3 项 cat3 用）----
@@ -2396,7 +2486,8 @@ def retrieve(
                 if extra_ids:
                     extra_rows = get_by_ids(extra_ids)
                     scored_extra = phase2_rank(query_text, extra_rows,
-                                               top_k=len(extra_rows)) if extra_rows else []
+                                               top_k=len(extra_rows),
+                                               bonus_map=_catalog_bonus_map) if extra_rows else []
                     already = {it.get("memory_id") for it in ranked}
                     added = [it for it in scored_extra
                              if it.get("memory_id") not in already]
@@ -2442,10 +2533,17 @@ def retrieve(
     if rerank_enabled and ranked:
         try:
             ranked = rerank_top(query_text, ranked, rerank_pool, stats=rank_stats,
-                                doc_source=rerank_doc, recency_map=_recency_map)
+                                doc_source=rerank_doc, recency_map=_recency_map,
+                                bonus_map=_catalog_bonus_map)
             total_ranked = len(ranked)
         except Exception as error:  # noqa: BLE001 - 旁路增强失败绝不能拖垮检索
             rank_stats["rerank_error"] = f"{type(error).__name__}: {error}"
+
+    # 交付层近似去重（默认开）：同一段对话的两条摘要只留一条。
+    # 放在 MMR 之前 —— 让"多样性挑选"看到的是已经去过重的列表，
+    # 否则 MMR 会把名额花在两条几乎一样的条目上。
+    if _cfg_bool("dedupe_near", True):
+        ranked = dedupe_near(ranked, _cfg_float("dedupe_threshold", 0.9), rank_stats)
 
     # 取 Final Top-N：MMR 开启时按多样性挑，否则保持"纯按相关性"的旧行为
     if mmr_lambda < 1.0:
@@ -2516,7 +2614,8 @@ def retrieve(
     return result
 
 
-def _audit_search(query_text: str, result: dict, trace_id: str, filters: dict) -> None:
+def _audit_search(query_text: str, result: dict, trace_id: str, filters: dict,
+                  conn=None) -> None:
     """B7 审计：记录一次检索。
 
     为什么接在 service 层而不是 MCP/FastAPI 层：
@@ -2543,12 +2642,14 @@ def _audit_search(query_text: str, result: dict, trace_id: str, filters: dict) -
             [it.get("memory_id") for it in items if it.get("memory_id")],
             trace_id=trace_id,
             actor="agent",
+            conn=conn,
         )
     except Exception as error:  # noqa: BLE001 - 审计失败不影响检索
         print(f"[B7] 检索审计写入失败: {type(error).__name__}: {error}")
 
 
-def _audit_heat(items: list[dict], heat_stats: dict, trace_id: str) -> None:
+def _audit_heat(items: list[dict], heat_stats: dict, trace_id: str,
+                conn=None) -> None:
     """B7 审计：记录一次升温改库（与同一次检索共用 trace_id）。"""
     try:
         from services.B7_audit import AuditLogger
@@ -2566,12 +2667,13 @@ def _audit_heat(items: list[dict], heat_stats: dict, trace_id: str) -> None:
             json.dumps(touched, ensure_ascii=False),
             trace_id=trace_id,
             actor="agent",
+            conn=conn,
         )
     except Exception as error:  # noqa: BLE001
         print(f"[B7] 升温审计写入失败: {type(error).__name__}: {error}")
 
 
-def _apply_retrieval_heat(items: list[dict]) -> dict:
+def _apply_retrieval_heat(items: list[dict], conn=None) -> dict:
     """对本次入选的记忆施加「检索命中」升温（B5 ACTIONS["retrieval_hit"]）。
 
     这是架构书 §5.7「检索升温」的落地点，也是整条链路唯一缺少的反馈回路：
@@ -2588,31 +2690,37 @@ def _apply_retrieval_heat(items: list[dict]) -> dict:
     被 Phase2 排到后面、又被预算裁掉的条目，等于没被想起，不该升温。
 
     失败绝不抛出：升温属于反馈信号，坏掉不能让检索本身失败。
+
+    ⚠️ 2026-10-28 性能：原先对每条 item 各调一次 `get_by_id` + 一次
+    `update_heat_count`，而这两个函数**各自开一条新 SQLite 连接**
+    （每次还要跑 3 条 PRAGMA）。交付 8 条 = 16 次 connect/close，实测 ~30ms，
+    占桥内非检索开销的大头。现改为：一次 `get_by_ids` 取回全部行 + 一次事务批量写。
+    语义不变（仍是逐条 `apply_action`、逐条回填、失败逐条计），只是不再重复建连接。
     """
     from services.B5_heat_state import HeatStateMachine
-    from services.B3_header_engine import update_heat_count, get_by_id
+    from services.B3_header_engine import update_heat_count_many, get_by_ids
 
     stats = {"applied": 0, "failed": 0, "ids": []}
     if not items:
         return stats
 
+    ids = [it.get("memory_id") for it in items if it.get("memory_id")]
+    rows = {r.get("memory_id"): r for r in get_by_ids(ids)}
     machine = HeatStateMachine()
+    pairs: list[tuple[str, float, int]] = []
+
     for item in items:
         memory_id = item.get("memory_id")
         if not memory_id:
             continue
         try:
-            row = get_by_id(memory_id)
-            current_heat = float((row or {}).get("heat") or 0.0)
-            current_count = int((row or {}).get("count") or 0)
+            row = rows.get(memory_id) or {}
+            current_heat = float(row.get("heat") or 0.0)
+            current_count = int(row.get("count") or 0)
             new_heat, new_count, _ = machine.apply_action(
                 current_heat, current_count, "retrieval_hit"
             )
-            update_heat_count(
-                memory_id,
-                heat_delta=new_heat - current_heat,
-                count_delta=new_count - current_count,
-            )
+            pairs.append((memory_id, new_heat - current_heat, new_count - current_count))
             # 回填到返回条目上，调用方/测试能直接看到升温结果
             item["heat"] = new_heat
             item["count"] = new_count
@@ -2622,6 +2730,17 @@ def _apply_retrieval_heat(items: list[dict]) -> dict:
         except Exception as error:  # noqa: BLE001 - 反馈信号失败不影响检索
             stats["failed"] += 1
             print(f"[B4] 升温失败 {memory_id}: {type(error).__name__}: {error}")
+
+    if pairs:
+        try:
+            update_heat_count_many(pairs, conn=conn)
+        except Exception as error:  # noqa: BLE001 - 批量写失败要整体回退标记
+            stats["failed"] += len(pairs)
+            stats["applied"] = 0
+            stats["ids"] = []
+            for item in items:
+                item.pop("_heat_applied", None)
+            print(f"[B4] 批量升温失败: {type(error).__name__}: {error}")
     return stats
 
 
@@ -2647,12 +2766,25 @@ def commit_retrieval(result: dict, query_text: str = "",
     """
     items = result.get("items") or []
     trace_id = result.get("trace_id", "")
-    heat_stats = _apply_retrieval_heat(items)
-    result["heat_stats"] = heat_stats
-    # 审计与升温共用 trace_id：一条 trace 两条动作（search + write），
-    # audit_log 的主键是 (trace_id, action)，所以两者不会互相覆盖。
-    _audit_search(query_text, result, trace_id, filters or {})
-    _audit_heat(items, heat_stats, trace_id)
+    # 三笔副作用（升温、search 审计、write 审计）共用**一条**连接：
+    # 它们本来就写同一个 header.db，各自开连接等于把同一份 PRAGMA 跑三遍。
+    # 拿不到连接就退回原路径（每条各开各的），绝不因为优化把副作用弄丢。
+    _conn = None
+    try:
+        from services.B3_header_engine import get_conn
+        _conn = get_conn()
+    except Exception:              # noqa: BLE001 - 连接失败就不共享，退化为旧行为
+        _conn = None
+    try:
+        heat_stats = _apply_retrieval_heat(items, conn=_conn)
+        result["heat_stats"] = heat_stats
+        # 审计与升温共用 trace_id：一条 trace 两条动作（search + write），
+        # audit_log 的主键是 (trace_id, action)，所以两者不会互相覆盖。
+        _audit_search(query_text, result, trace_id, filters or {}, conn=_conn)
+        _audit_heat(items, heat_stats, trace_id, conn=_conn)
+    finally:
+        if _conn is not None:
+            _conn.close()
     return heat_stats
 
 

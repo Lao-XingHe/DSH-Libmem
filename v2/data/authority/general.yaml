@@ -1,0 +1,67 @@
+# 通用款目表（随插件分发 · 与具体用户无关）
+#
+# 这是「公版」：一个装了插件的新用户，在他自己还没建出私人款目表之前，
+# 先用这一份把最常见的那批词收敛掉。
+#
+# 什么样的词**才该**放进来（这是纪律，别破坏）：
+#   1. 跨用户、跨行业都成立的**工具名 / 格式名 / 通用概念**；
+#   2. 同一个东西的**写法差异**（大小写、连字符、全半角、常见缩写）；
+#   3. 不超过 3 个别名 —— 再多就是私人用法了。
+#
+# 什么**不该**放进来：
+#   ✗ 任何人的**项目名 / 人名 / 自造词**（`书房OS`、`LibMEM` 这类属于私人层）；
+#   ✗ 需要上下文才能判断关系的词（"上次那个"）；
+#   ✗ 靠 AI 猜出来的同义词 —— 猜错了就是错误召回。
+#
+# 私人层见 `private.yaml`（由 AI 从这个用户的记忆里建出来，可随时重建）。
+
+meta:
+  version: 1
+  scope: general
+  updated: "2026-11-01"
+  note: "通用款目：只收跨用户成立的写法差异，不收任何人的项目名"
+
+entries:
+  # ---------- AI / 模型 ----------
+  - {canonical: llm, kind: concept, aliases: [大语言模型, 大模型, language model]}
+  - {canonical: rag, kind: concept, aliases: [检索增强生成, 检索增强, Retrieval-Augmented Generation]}
+  - {canonical: embedding, kind: concept, aliases: [向量, 嵌入, 向量化, 嵌入向量]}
+  - {canonical: rerank, kind: concept, aliases: [重排, 重排序, re-rank, reranker]}
+  - {canonical: token, kind: concept, aliases: [词元, 令牌]}
+  - {canonical: prompt, kind: concept, aliases: [提示词, 提示语, 指令词]}
+  - {canonical: ollama, kind: tool, aliases: [Ollama]}
+  - {canonical: llama.cpp, kind: tool, aliases: [llamacpp, llama-cpp, llama cpp]}
+
+  # ---------- 软件 / 工程 ----------
+  - {canonical: github, kind: tool, aliases: [GitHub, gh]}
+  - {canonical: git, kind: tool, aliases: [Git]}
+  - {canonical: python, kind: tool, aliases: [Python, py]}
+  - {canonical: npm, kind: tool, aliases: [NPM, node package manager]}
+  - {canonical: api, kind: concept, aliases: [API, 接口, 应用程序接口]}
+  - {canonical: sdk, kind: concept, aliases: [SDK]}
+  - {canonical: sqlite, kind: tool, aliases: [SQLite]}
+  - {canonical: json, kind: format, aliases: [JSON]}
+  - {canonical: yaml, kind: format, aliases: [YAML, yml]}
+  - {canonical: markdown, kind: format, aliases: [Markdown, md]}
+  - {canonical: pdf, kind: format, aliases: [PDF]}
+  - {canonical: csv, kind: format, aliases: [CSV]}
+  - {canonical: docker, kind: tool, aliases: [Docker, 容器]}
+  - {canonical: vscode, kind: tool, aliases: [VS Code, Visual Studio Code]}
+  - {canonical: node.js, kind: tool, aliases: [nodejs, node, Node]}
+
+  # ---------- 知识 / 信息管理 ----------
+  - {canonical: 记忆, kind: concept, aliases: [memory, 记忆库]}
+  - {canonical: 检索, kind: concept, aliases: [搜索, 查找, search, retrieval]}
+  - {canonical: 索引, kind: concept, aliases: [index, 倒排索引]}
+  - {canonical: 分类, kind: concept, aliases: [类目, classification, 分类法]}
+  - {canonical: 标签, kind: concept, aliases: [tag, 标签词, 主题词]}
+  - {canonical: 摘要, kind: concept, aliases: [summary, 总结, 概览]}
+  - {canonical: 缓存, kind: concept, aliases: [cache, 快取]}
+  - {canonical: 备份, kind: concept, aliases: [backup, 归档]}
+
+  # ---------- 通用工作 ----------
+  - {canonical: 会议, kind: concept, aliases: [meeting, 开会]}
+  - {canonical: 预算, kind: concept, aliases: [budget, 成本]}
+  - {canonical: 合同, kind: concept, aliases: [contract, 协议]}
+  - {canonical: 简历, kind: concept, aliases: [resume, cv, 求职简历]}
+  - {canonical: 待办, kind: concept, aliases: [todo, to-do, 任务清单]}
