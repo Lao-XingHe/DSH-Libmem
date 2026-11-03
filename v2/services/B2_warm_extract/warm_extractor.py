@@ -45,6 +45,30 @@ def _is_error_response(text: str) -> bool:
         return True
     return False
 
+def _protocol_prompt(user: str, assistant: str) -> str:
+    """按「模型协议」表生成 prompt；协议不可用时回退旧 prompt（绝不中断提炼）。"""
+    try:
+        from .protocol import build_prompt
+        slots = _task_type_slots()
+        return build_prompt(user, assistant,
+                            task_values=slots.get("task_values", "").replace(" ", "").split("/"),
+                            task_judges=slots.get("task_judges", ""))
+    except Exception:                                            # noqa: BLE001
+        return EXTRACT_PROMPT.format(user=user, assistant=assistant, **_task_type_slots())
+
+
+def _protocol_validate(result) -> dict:
+    """按协议表校验输出；失败不丢整条，只记日志（能救的字段留下）。"""
+    try:
+        from .protocol import validate
+        cleaned, errors = validate(result)
+        if errors:
+            _eprint(f"  [协议] {len(errors)} 处不合规：" + "；".join(errors[:4]))
+        return cleaned if cleaned else (result or {})
+    except Exception:                                            # noqa: BLE001
+        return result or {}
+
+
 def _get_warm_dir() -> str:
     from services.shared.config.loader import get_data_path
     path = get_data_path("warm_dir", "./data/warm")
@@ -190,10 +214,11 @@ def extract_warm_from_date(date_str: str, llm) -> int:
             if i % 20 == 0:
                 _eprint(f"  [{i+1}/{total}] 跳过（已存在）")
             continue
-        prompt = EXTRACT_PROMPT.format(user=user[:500], assistant=assistant[:500],
-                                       **_task_type_slots())
+        prompt = _protocol_prompt(user[:500], assistant[:500])
         _eprint(f"  [{i+1}/{total}] 调用小模型 ({llm.small.name})...", end=" ", flush=True)
         result = llm.infer_small_json(prompt, task_type="warm_extract") if llm else {}
+        if result:
+            result = _protocol_validate(result)
         if result and isinstance(result, dict) and "summary" in result:
             payload = dict(result)
             payload["id"] = uid

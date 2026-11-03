@@ -29,7 +29,7 @@
 另外：正文截断上限从 `[:10000]` 提到可配（默认 200k），并在报告里标 `truncated` ——
 截断意味着「文档后半截搜不到」，这属于必须让人知道的信息。
 """
-import os, shutil, time
+import os, re, shutil, time
 
 import jieba
 from whoosh.index import create_in, open_dir
@@ -71,11 +71,54 @@ class JiebaTokenizer(Tokenizer):
 JIEBA_ANALYZER = JiebaTokenizer() | LowercaseFilter()
 
 SCHEMA = Schema(
-    path=ID(stored=True, unique=True),
+    # ★ 2026-11-03：文档级 → **块级**索引。
+    #   原因（实测）：一份 67KB 的章节被当成一篇文档，搜「受控词表」时命中的预览
+    #   永远是章节开头那几句 —— 能告诉你"在这本书里"，但送不到具体那一段。
+    #   图书馆的说法：目录卡告诉你"在哪个馆藏"，索引款目才能告诉你"在哪一页"。
+    path=ID(stored=True, unique=True),      # 唯一 id：原文件路径#块号
+    doc_path=ID(stored=True),               # 原文件路径（knowledge_read 要用它）
+    chunk=NUMERIC(stored=True),             # 块号（从 0 起）
     name=TEXT(stored=True, analyzer=JIEBA_ANALYZER),
     content=TEXT(analyzer=JIEBA_ANALYZER, stored=True),
     size_kb=NUMERIC(stored=True),
 )
+
+# 分块参数：目标 1500 字，最多 2500 字（中文按字符算，1500 字≈一段完整论述）
+CHUNK_TARGET = 1500
+CHUNK_MAX = 2500
+_CHUNK_HEAD = re.compile(
+    r"^(?:#{1,6}\s+|第[一二三四五六七八九十百]+[章节]|[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|\d+(?:\.\d+)+\s)")
+
+
+def chunk_text(content: str, target: int = CHUNK_TARGET, max_len: int = CHUNK_MAX) -> list:
+    """把长文切成**按小节对齐**的块。
+
+    为什么要按小节切而不是定长切：定长会把一个定义从中间劈开，
+    而"受控语言的规范化包括三方面"这种句子一旦被劈开，后半句就搜不到了。
+    优先在小节标题处断开；只有一节本身超长时才按 max_len 硬切。
+    """
+    lines = (content or "").splitlines()
+    chunks, buf, size = [], [], 0
+    for ln in lines:
+        s = ln.strip()
+        if buf and size >= target * 0.5 and _CHUNK_HEAD.match(s):
+            chunks.append("\n".join(buf))
+            buf, size = [], 0
+        buf.append(ln)
+        size += len(ln) + 1
+        if size >= max_len:
+            chunks.append("\n".join(buf))
+            buf, size = [], 0
+    if buf:
+        chunks.append("\n".join(buf))
+    # 太短的尾巴并进上一块，避免产生一堆没信息的碎块
+    out = []
+    for c in chunks:
+        if out and len(c.strip()) < 200:
+            out[-1] = out[-1] + "\n" + c
+        elif c.strip():
+            out.append(c)
+    return out or [content or ""]
 
 
 def _get_index_dir():
@@ -204,6 +247,7 @@ def reindex_knowledge(max_chars: int = DEFAULT_MAX_CHARS) -> dict:
 
     writer = _CURRENT_INDEX.writer()
     indexed, skipped, truncated = 0, [], []
+    chunks_total = 0
     files = 0
     for root, _dirs, names in os.walk(kb_dir):
         for fname in sorted(names):
@@ -221,18 +265,56 @@ def reindex_knowledge(max_chars: int = DEFAULT_MAX_CHARS) -> dict:
             if len(content) > max_chars:
                 truncated.append(fname)
                 content = content[:max_chars]
-            writer.update_document(
-                path=fp, name=fname, content=content,
-                size_kb=round(os.path.getsize(fp) / 1024, 1),
-            )
+            # ★ 2026-11-03：按小节切块，一块一篇文档（块级索引）
+            parts = chunk_text(content)
+            for ci, part in enumerate(parts):
+                writer.update_document(
+                    path=f"{fp}#{ci}",
+                    doc_path=fp,
+                    chunk=ci,
+                    name=fname,
+                    content=part,
+                    size_kb=round(len(part.encode("utf-8")) / 1024, 1),
+                )
+            chunks_total += len(parts)
             indexed += 1
     writer.commit()
+
+    # ★ 2026-11-03：**入库即编目**。用户的原话：「进来的东西按道理就要做一个编目」。
+    #   只建正文索引、不建款目，就会出现「记得大概名字却搜不到」
+    #   （`《万情补天录》.docx` 文件名里没有"大纲"，靠正文永远搜不出来）。
+    #   失败不拖垮索引：款目是旁路，最多是这一次没编上。
+    try:
+        from services.C1_knowledge.catalog import build as _catalog_build
+        catalog_stats = _catalog_build(dry_run=False)
+    except Exception as error:  # noqa: BLE001
+        catalog_stats = f"failed: {type(error).__name__}: {error}"
+        print(f"  [KB] 编目失败（不影响正文索引）: {error}")
+
+    # ★ 2026-11-03：规则编不出来的（体裁=未分类/主题词为空），交给本机小模型补。
+    #   **限量**（默认 8 份/次）：入库不能因为要等模型而卡住；
+    #   积压的存量用 `bin/catalog-llm.py --all` 一次补完。
+    #   关掉：config `knowledge.llm_catalog: false`。
+    llm_stats = None
+    try:
+        from services.shared.config import loader
+        want = ((loader.get_config() or {}).get("knowledge", {}) or {}).get("llm_catalog", True)
+        if want:
+            from services.C1_knowledge.llm_catalog import catalog_missing, enrich
+            todo = catalog_missing(limit=8)
+            if todo:
+                llm_stats = enrich(todo)
+    except Exception as error:  # noqa: BLE001 - 模型不可用不影响入库
+        llm_stats = f"skipped: {type(error).__name__}: {error}"
 
     report = {
         "kb_dir": kb_dir,
         "index_dir": kb_idx,
         "files": files,
         "indexed": indexed,
+        "chunks": chunks_total,          # 实际进索引的块数（≥ indexed）
+        "catalogued": catalog_stats,     # 入库即编目（款目数）
+        "llm_catalog": llm_stats,        # 本轮用小模型补的编目
         "skipped": skipped,
         "truncated": truncated,
         "docs_in_index": docs_in_index(),
@@ -331,11 +413,44 @@ def search_knowledge_index(query: str, top_k: int = 10,
             results = searcher.search(q, limit=top_k)
             hits = [{
                 "name": r["name"],
-                "path": r["path"],
+                # path 给的是**原文件路径**（knowledge_read 要拿它读全文），
+                # 块号另给 —— 否则调用方会拿着 "xxx#3" 去 open 一个不存在的文件
+                "path": r["doc_path"],
+                "chunk": r.get("chunk"),
                 "size_kb": r["size_kb"],
                 "content_preview": r["content"][:200],
                 "_score": round(r.score, 2),
+                "matched_by": "content",
             } for r in results]
+
+        # ★ 2026-11-03：**先查款目**（题名/体裁/主题词/项目），再查正文。
+        #   用户的原话：「人的记忆不精确，往往只记得大概名字」——
+        #   `《万情补天录》.docx` 文件名里没有"大纲"二字，靠正文检索永远搜不到，
+        #   但它编目后 `genre=大纲`，一查款目就出来。
+        try:
+            from services.C1_knowledge.catalog import lookup as _cat_lookup
+            seen = {h["path"] for h in hits}
+            cat = [c for c in _cat_lookup(query, top_k=max(3, top_k // 2))
+                   if c["path"] not in seen]
+            # ⚠️ 2026-11-03 修：第一版在循环里 `hits.insert(0, …)`，
+            #   于是**分数最高的那条被挤到最后**（插入顺序反了）。
+            #   现在先攒成列表、再整体拼到前面，顺序就是 `lookup` 给的分数序。
+            cat_hits = []
+            for c in cat:
+                cat_hits.append({
+                    "name": os.path.basename(c["path"]),
+                    "path": c["path"],
+                    "chunk": None,
+                    "size_kb": None,
+                    "content_preview": "【著录】%s ｜ 体裁：%s ｜ 项目：%s ｜ 主题词：%s"
+                                        % (c["title"], c["genre"], c["project"],
+                                           "、".join(c["subjects"][:5])),
+                    "_score": c["catalog_score"],
+                    "matched_by": "catalog",
+                })
+            hits = cat_hits + hits
+        except Exception as error:  # noqa: BLE001 - 款目查不到不影响正文检索
+            print(f"  [KB] 款目检索跳过: {type(error).__name__}: {error}")
         if with_related:
             for hit in hits[:3]:          # 只给前 3 条做关联，避免多次嵌入
                 hit["related_memories"] = related_memories_for(hit["name"], top_k=3)

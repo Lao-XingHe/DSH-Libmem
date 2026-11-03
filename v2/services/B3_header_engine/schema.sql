@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS memories (
     has_l3          INTEGER NOT NULL DEFAULT 0,       -- Phase2: 1=content_path 文件存在（可 drilldown 到 L3）
     -- ★ V1.1：最近一次「被检索命中 / 被采用」的时间（epoch 秒），0 = 从未。
     --   为什么不复用 updated_at：衰减任务会按设计把**全库** updated_at 刷成当下
-    --   （它是"热度基准时刻"，不是"最近使用时刻"），所以后者不能当近期信号用。
+    --   （它是「热度基准时刻」，不是「最近使用时刻」），所以后者不能当近期信号用。
     --   纯增量列，存量库由 `ensure_schema()` 自动 ALTER 补上。
     last_hit_epoch  REAL NOT NULL DEFAULT 0
 );
@@ -118,3 +118,73 @@ CREATE TABLE IF NOT EXISTS frames (
 CREATE INDEX IF NOT EXISTS idx_frames_type     ON frames(frame_type);
 CREATE INDEX IF NOT EXISTS idx_frames_created  ON frames(created_at);
 CREATE INDEX IF NOT EXISTS idx_frames_audit    ON frames(audit_signature);
+
+-- ==================================================================
+-- P1 馆藏对象模型（2026-10-24）
+--
+-- 为什么加这三张表：Libmem 定位从「记忆插件」升级成「AI 馆藏」，
+-- 记忆只是其中一种来源。三层对象：
+--   assets       原始资产（对话/文档/图片…），一件资产可切出多条 items
+--   items        可检索单元（现在一条记忆 = 一条 item，item_id 复用 memory_id）
+--   descriptions 标目（分类/主题词/时间/类型/来源）—— P0 编目层的产出
+--
+-- 全部是**新增表**，不改 memories；老代码照跑，出问题删表即回滚。
+-- ==================================================================
+CREATE TABLE IF NOT EXISTS assets (
+    asset_id     TEXT PRIMARY KEY,                -- 资产 id（对话：按冷库文件去重）
+    kind         TEXT NOT NULL DEFAULT 'dialog',  -- dialog / doc / image / video / web
+    uri          TEXT,                            -- 原件位置（冷库路径 / 文件路径）
+    hash         TEXT,                            -- 内容指纹（去重、迁移用）
+    created_at   TEXT NOT NULL,                   -- ISO 8601
+    meta_json    TEXT NOT NULL DEFAULT '{}'       -- 各类型自己的元数据
+);
+CREATE INDEX IF NOT EXISTS idx_assets_kind ON assets(kind);
+
+CREATE TABLE IF NOT EXISTS items (
+    item_id      TEXT PRIMARY KEY,                -- 现在复用 memory_id
+    asset_id     TEXT,                            -- 指向 assets
+    seq          INTEGER NOT NULL DEFAULT 0,      -- 一件资产内的顺序（文档分块/视频分段用）
+    text         TEXT,                            -- 可检索正文（对话：摘要；文档：分块原文）
+    summary      TEXT,                            -- 提炼摘要
+    char_start   INTEGER,                         -- 在原件里的起止（可回溯）
+    char_end     INTEGER,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_items_asset ON items(asset_id);
+
+CREATE TABLE IF NOT EXISTS descriptions (
+    item_id      TEXT PRIMARY KEY,                -- 一条 item 一份标目
+    class        TEXT NOT NULL DEFAULT '其他',     -- 一级类目（通用知识工作域）
+    sub_class    TEXT,                            -- 二级类目（数据驱动：类内主题簇）
+    alt_class    TEXT NOT NULL DEFAULT '',        -- 副类（第二分类号，多标签用）
+    terms        TEXT NOT NULL DEFAULT '[]',      -- 受控主题词 JSON 数组
+    year         INTEGER, month INTEGER, week INTEGER, day INTEGER,
+    task_type    TEXT,                            -- 沿用原来的活动类型
+    source       TEXT NOT NULL DEFAULT 'dialog',  -- 来源：dialog / doc / image
+    confidence   REAL NOT NULL DEFAULT 0.5,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_desc_class ON descriptions(class);
+CREATE INDEX IF NOT EXISTS idx_desc_time  ON descriptions(year, month);
+
+-- ==================================================================
+-- P0 编目层：受控词表 + 倒排（2026-10-24）
+-- terms     受控词表（canonical + 别名），doc_freq 用于 idf 加权
+-- mem_terms 倒排表（哪条 item 含哪个规范词、权重）
+-- ==================================================================
+CREATE TABLE IF NOT EXISTS terms (
+    term_id      TEXT PRIMARY KEY,                -- sha1(canonical)[:12]
+    canonical    TEXT NOT NULL UNIQUE,            -- 规范词
+    kind         TEXT NOT NULL DEFAULT 'entity',  -- entity / class / topic
+    aliases_json TEXT NOT NULL DEFAULT '[]',      -- 同义/别名（原词保留在这）
+    doc_freq     INTEGER NOT NULL DEFAULT 0       -- 含该词的 item 数
+);
+CREATE INDEX IF NOT EXISTS idx_terms_canonical ON terms(canonical);
+
+CREATE TABLE IF NOT EXISTS mem_terms (
+    item_id      TEXT NOT NULL,
+    term_id      TEXT NOT NULL,
+    weight       REAL NOT NULL DEFAULT 1.0,
+    PRIMARY KEY (item_id, term_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mem_terms_term ON mem_terms(term_id);

@@ -160,7 +160,31 @@ def see_also(term: str, k: int = _MAX_PER_TERM) -> list:
                 "ORDER BY weight DESC, cooc DESC LIMIT ?", (term, k)):
             out.append({"term": to_term, "kind": "related",
                         "weight": round(float(weight), 2), "cooc": int(cooc)})
-        return out[:k]
+        # ★ 2026-11-03：词族（真关系，优先于分类号倒推的那套）
+        #   依据《汉语主题词表》词族索引：族首词在顶层，其余词挂 S（属）、
+        #   整族用 Z（族项）指回族首词。词表里有的，就不用"猜"的。
+        try:
+            from services.B8_catalog.families import lookup as _family
+            fam = _family(term)
+            if fam:
+                if fam.get("parent"):
+                    out.append({"term": fam["parent"], "kind": "broader",
+                                "weight": 1.0, "cooc": 0, "source": "词族"})
+                for child in (fam.get("children") or [])[:4]:
+                    if child != term:
+                        out.append({"term": child, "kind": "narrower",
+                                    "weight": 1.0, "cooc": 0, "source": "词族"})
+        except Exception:  # noqa: BLE001 - 词族坏了只是少一路参见
+            pass
+        # 上下位兜底：分类号倒推（B8/callno.py），词族没收的词靠它
+        for kind, label in (("S", "broader"), ("F", "narrower")):
+            for (to_term,) in conn.execute(
+                    "SELECT to_term FROM term_edges WHERE from_term=? AND kind=? LIMIT ?",
+                    (term, kind, k)):
+                if not any(o["term"] == to_term for o in out):
+                    out.append({"term": to_term, "kind": label, "weight": 1.0,
+                                "cooc": 0, "source": "分类号"})
+        return out[:k + 4]
     finally:
         conn.close()
 

@@ -527,7 +527,7 @@ def _library_browse(class_name: str, year: int, month: int, term: str, limit: in
     if term:
         where.append("d.terms LIKE ?"); params.append('%"' + term + '"%')
     sql = ("SELECT i.item_id, i.summary, i.created_at, d.class, d.sub_class, d.terms, "
-           "d.year, d.month, d.week, d.day, d.task_type, a.kind, a.uri "
+           "d.year, d.month, d.week, d.day, d.task_type, d.call_no, a.kind, a.uri "
            "FROM items i JOIN descriptions d ON d.item_id = i.item_id "
            "LEFT JOIN assets a ON a.asset_id = i.asset_id")
     if where:
@@ -539,7 +539,9 @@ def _library_browse(class_name: str, year: int, month: int, term: str, limit: in
     #   这正是"可回滚"的地方：默认行为一个字节没变，只有显式要才变。
     use_class = (order_by or "time").lower() == "class"
     if use_class:
-        sql += " ORDER BY d.class ASC, i.created_at DESC, i.item_id DESC LIMIT ?"
+        # 2026-11-03：按**分类号**排（如 02-01-003），不是类名字母序 —— 见 B8/callno.py
+        sql += (" ORDER BY COALESCE(NULLIF(d.call_no,''),'99-99-999') ASC, "
+                "i.created_at DESC LIMIT ?")
     else:
         sql += " ORDER BY i.created_at DESC, i.item_id DESC LIMIT ?"
     params.append(int(limit))
@@ -555,14 +557,8 @@ def _library_browse(class_name: str, year: int, month: int, term: str, limit: in
             except Exception:
                 d["terms"] = []
             rows.append(d)
-        # L6：排架次序（公版 class 顺序）而不是类名字母序 —— 见 B8/shelf.py
-        if use_class:
-            try:
-                from services.B8_catalog.shelf import rank as _shelf_rank
-                rows.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-                rows.sort(key=lambda x: _shelf_rank(x.get("class") or ""))
-            except Exception:  # noqa: BLE001 - 排架表坏了就保持 SQL 的字母序
-                pass
+        # 2026-11-03：排架顺序已由 SQL 按 `call_no` 给出（分类号，如 02-01-003），
+        # 这里**不再二次排序** —— 之前的 shelf.rank 只认一级类目，会把号序打乱。
     finally:
         conn.close()
     return {"ok": True, "action": "browse",
@@ -938,6 +934,32 @@ def authority_build(dry_run: bool = True) -> dict:
     return A.build_private(dry_run=dry_run)
 
 
+def memory_state(work: str, limit: int = 20) -> dict:
+    """**现在是什么状态** —— 一个作品当前有效的那条 + 沿革 + 证据。
+
+    ★ 2026-11-03（沿革）：这是整套改造里**唯一能回答"现在是多少"**的入口。
+      `memory_search` 回答"哪条最像"，本工具回答"**现在是什么**"。
+
+    返回里：
+      * `current`  —— 现在仍有效的那条（同一作品键下只有一条）
+      * `history`  —— 按时间倒序，带 `valid_from / valid_to / superseded_by`
+      * `uncertain`—— 被降级但**没有明确继承者**的条目：
+        它们只是同键更早，不代表说错了。没标出来的话，"历史"会被误读成"已被推翻"。
+
+    Args:
+        work: 作品键（一般是该条的主主题词，例如 `自动记录`、`守护进程`）。
+        limit: 最多回多少条历史。
+    """
+    from services.B8_catalog import succession as _succ
+    return _succ.state(work, limit=limit)
+
+
+def memory_state_stats() -> dict:
+    """沿革表体检：多少条记录、多少条被取代、多少个作品有真正的沿革链。"""
+    from services.B8_catalog import succession as _succ
+    return _succ.stats()
+
+
 # ---------------------------------------------------------------------------
 # 注册表：HTTP 桥按名字分发，也用于 `/tools` 自检与文档生成
 # ---------------------------------------------------------------------------
@@ -973,6 +995,9 @@ TOOLS = {
     "authority_lookup": authority_lookup,
     "authority_status": authority_status,
     "authority_build": authority_build,
+    # ★ 2026-11-03（沿革）：回答"现在是什么状态"
+    "memory_state": memory_state,
+    "memory_state_stats": memory_state_stats,
     # ★ 2026-11-01：功能开关体检（排查"为什么没生效"先看它）
     "features_status": features_status,
     # ★ 2026-10-12（P2）：整链体检 —— 三层对账，只读
